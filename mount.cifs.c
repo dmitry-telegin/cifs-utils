@@ -186,6 +186,7 @@ struct parsed_mount_info {
 	char username[MAX_USERNAME_SIZE + 1];
 	char password[MOUNT_PASSWD_SIZE + 1];
 	char addrlist[MAX_ADDR_LIST_LEN];
+	char sep_char;
 	unsigned int got_user:1;
 	unsigned int got_password:1;
 	unsigned int fakemnt:1;
@@ -199,6 +200,10 @@ struct parsed_mount_info {
 
 static const char *thisprogram;
 static const char *cifs_fstype;
+
+static const char *sep_token = "sep=";
+static char sep_char = ',';
+static char sep_str[] = ",";
 
 static int parse_unc(const char *unc_name, struct parsed_mount_info *parsed_info, const char *progname);
 
@@ -329,6 +334,10 @@ static int mount_usage(FILE * stream)
  * CIFS has to "escape" commas in the password field so that they don't
  * end up getting confused for option delimiters. Copy password into pw
  * field, turning any commas into double commas.
+ *
+ * The kernel will not accept a doubled custom separator, so
+ * the algorithm always doubles only the comma. With the "sep=" parameter set,
+ * the kernel also successfully accepts double commas.
  */
 static int set_password(struct parsed_mount_info *parsed_info, const char *src)
 {
@@ -836,7 +845,6 @@ parse_options(const char *data, struct parsed_mount_info *parsed_info)
 	/* make sure we're starting from beginning */
 	out[0] = '\0';
 
-	/* BB fixme check for separator override BB */
 	uid = getuid();
 	if (uid != 0)
 		got_uid = 1;
@@ -848,13 +856,26 @@ parse_options(const char *data, struct parsed_mount_info *parsed_info)
 	if (!data)
 		return EX_USAGE;
 
+	/* Check for separator override (first mount option after the -o) */
+	/* Example: -o sep=!user=myname!password=mypassword!domain=mydom */
+	{
+		size_t sep_token_len = strlen(sep_token);
+		if ((strlen(data) > sep_token_len) &&
+			(strstr(data, sep_token) == data)) {
+			sep_char = data[sep_token_len];
+			sep_str[0] = sep_char;
+			parsed_info->sep_char = sep_char;
+			data += sep_token_len + 1;
+		}
+	}
+
 	/*
 	 * format is keyword,keyword2=value2,keyword3=value3... 
 	 * data  = next keyword
 	 * value = next value ie stuff after equal sign
 	 */
 	while (data && *data) {
-		next_keyword = strchr(data, ',');	/* BB handle sep= */
+		next_keyword = strchr(data, sep_char);
 
 		/* temporarily null terminate end of keyword=value pair */
 		if (next_keyword)
@@ -1195,7 +1216,7 @@ parse_options(const char *data, struct parsed_mount_info *parsed_info)
 
 		/* go ahead and copy */
 		if (out_len)
-			strlcat(out, ",", MAX_OPTIONS_LEN);
+			strlcat(out, sep_str, MAX_OPTIONS_LEN);
 
 		strlcat(out, data, MAX_OPTIONS_LEN);
 		out_len = strlen(out);
@@ -1215,7 +1236,7 @@ nocopy:
 		}
 
 		if (out_len) {
-			strlcat(out, ",", MAX_OPTIONS_LEN);
+			strlcat(out, sep_str, MAX_OPTIONS_LEN);
 			out_len++;
 		}
 		snprintf(out + out_len, word_len + 5, "uid=%s", txtbuf);
@@ -1235,7 +1256,7 @@ nocopy:
 		}
 
 		if (out_len) {
-			strlcat(out, ",", MAX_OPTIONS_LEN);
+			strlcat(out, sep_str, MAX_OPTIONS_LEN);
 			out_len++;
 		}
 		snprintf(out + out_len, word_len + 7, "cruid=%s", txtbuf);
@@ -1251,7 +1272,7 @@ nocopy:
 		}
 
 		if (out_len) {
-			strlcat(out, ",", MAX_OPTIONS_LEN);
+			strlcat(out, sep_str, MAX_OPTIONS_LEN);
 			out_len++;
 		}
 		snprintf(out + out_len, word_len + 5, "gid=%s", txtbuf);
@@ -1267,7 +1288,7 @@ nocopy:
 		}
 
 		if (out_len) {
-			strlcat(out, ",", MAX_OPTIONS_LEN);
+			strlcat(out, sep_str, MAX_OPTIONS_LEN);
 			out_len++;
 		}
 		snprintf(out + out_len, word_len + 11, "backupuid=%s", txtbuf);
@@ -1283,7 +1304,7 @@ nocopy:
 		}
 
 		if (out_len) {
-			strlcat(out, ",", MAX_OPTIONS_LEN);
+			strlcat(out, sep_str, MAX_OPTIONS_LEN);
 			out_len++;
 		}
 		snprintf(out + out_len, word_len + 11, "backupgid=%s", txtbuf);
@@ -1942,7 +1963,7 @@ assemble_mountinfo(struct parsed_mount_info *parsed_info,
 	/* copy in user= string */
 	if (parsed_info->got_user) {
 		if (*parsed_info->options)
-			strlcat(parsed_info->options, ",",
+			strlcat(parsed_info->options, sep_str,
 				sizeof(parsed_info->options));
 		strlcat(parsed_info->options, "user=",
 			sizeof(parsed_info->options));
@@ -1952,14 +1973,15 @@ assemble_mountinfo(struct parsed_mount_info *parsed_info,
 
 	if (*parsed_info->domain) {
 		if (*parsed_info->options)
-			strlcat(parsed_info->options, ",",
+			strlcat(parsed_info->options, sep_str,
 				sizeof(parsed_info->options));
 		strlcat(parsed_info->options, "domain=",
 			sizeof(parsed_info->options));
 		strlcat(parsed_info->options, parsed_info->domain,
 			sizeof(parsed_info->options));
 	} else if (parsed_info->got_domain) {
-		strlcat(parsed_info->options, ",domain=",
+		strlcat(parsed_info->options, sep_str, sizeof(parsed_info->options));
+		strlcat(parsed_info->options, "domain=",
 			sizeof(parsed_info->options));
 	}
 
@@ -2109,6 +2131,9 @@ int main(int argc, char **argv)
 		goto mount_exit;
 	}
 
+	/* Initialize separator (changeable by child process) */
+	parsed_info->sep_char = sep_char;
+
 	/* add sharename in opts string as unc= parm */
 	while ((c = getopt_long(argc, argv, "?fhno:rsvVw",
 				longopts, NULL)) != -1) {
@@ -2213,26 +2238,41 @@ mount_retry:
 		rc = parsed_info->nofail ? 0 : EX_FAIL;
 		goto mount_exit;
 	}
-	strlcpy(options, "ip=", options_size);
+
+	/* Load separator from child process */
+	sep_char = parsed_info->sep_char;
+	sep_str[0] = sep_char;
+
+	/* Separator override must be the first mount option. */
+	if (',' != sep_char) {
+		strlcpy(options, sep_token, options_size);
+		strlcat(options, sep_str, options_size);
+	}
+
+	strlcat(options, "ip=", options_size);
 	strlcat(options, currentaddress, options_size);
 
-	strlcat(options, ",unc=\\\\", options_size);
+	strlcat(options, sep_str, options_size);
+	strlcat(options, "unc=\\\\", options_size);
 	strlcat(options, parsed_info->host, options_size);
 	strlcat(options, "\\", options_size);
 	strlcat(options, parsed_info->share, options_size);
 
 	if (*parsed_info->options) {
-		strlcat(options, ",", options_size);
+		strlcat(options, sep_str, options_size);
 		strlcat(options, parsed_info->options, options_size);
 	}
 
 	if (*parsed_info->prefix) {
-		strlcat(options, ",prefixpath=", options_size);
+		strlcat(options, sep_str, options_size);
+		strlcat(options, "prefixpath=", options_size);
 		strlcat(options, parsed_info->prefix, options_size);
 	}
 
-	if (sloppy)
-		strlcat(options, ",sloppy", options_size);
+	if (sloppy) {
+		strlcat(options, sep_str, options_size);
+		strlcat(options, "sloppy", options_size);
+	}
 
 	if (parsed_info->verboseflag)
 		fprintf(stderr, "%s kernel mount options: %s",
@@ -2243,10 +2283,11 @@ mount_retry:
 		 * Commas have to be doubled, or else they will
 		 * look like the parameter separator
 		 */
-		strlcat(options, ",pass=", options_size);
+		strlcat(options, sep_str, options_size);
+		strlcat(options, "pass=", options_size);
 		strlcat(options, parsed_info->password, options_size);
 		if (parsed_info->verboseflag)
-			fprintf(stderr, ",pass=********");
+			fprintf(stderr, "%spass=********", sep_str);
 	}
 
 	if (parsed_info->verboseflag)

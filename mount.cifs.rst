@@ -39,6 +39,7 @@ Options to mount.cifs are specified as a comma-separated list of
 listed here, assuming that the cifs filesystem kernel module
 (``cifs.ko``) supports them. Unrecognized cifs mount options passed to
 the cifs vfs kernel code will be logged to the kernel log.
+The separator overwrite option (sep=) is described below.
 
 ``mount.cifs`` causes the cifs vfs to launch a thread named
 cifsd. After mounting it keeps running until the mounted resource is
@@ -148,6 +149,18 @@ netbiosname=arg
   When mounting to servers via port 139, specifies the RFC1001 source
   name to use to represent the client netbios machine during the netbios
   session initialization.
+
+sep=arg
+  if first mount option (after the -o), overrides the comma as the separator
+  between the mount parms. e.g.:
+  "-o user=myname,password=mypassword,domain=mydom"
+  could be passed instead with exclamation point as the separator by:
+  "-o 'sep=!user=myname!password=mypassword!domain=mydom'"
+  this might be useful when comma is contained within service or username or
+  domain.
+  Do not use custom separator in password.
+  Do not use period or slashes (already used in ip and UNC name).
+  Turn on the "--verbose" option to control the result.
 
 servern=arg
   Similar to ``netbiosname`` except it specifies the netbios name of
